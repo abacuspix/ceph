@@ -7653,7 +7653,6 @@ Fh *Client::_create_fh(Inode *in, int flags, int cmode)
   }
 
   const md_config_t *conf = cct->_conf;
-  loff_t p = in->layout.stripe_count * in->layout.object_size;
   f->readahead.set_trigger_requests(1);
   f->readahead.set_min_readahead_size(conf->client_readahead_min);
   uint64_t max_readahead = Readahead::NO_LIMIT;
@@ -7661,11 +7660,11 @@ Fh *Client::_create_fh(Inode *in, int flags, int cmode)
     max_readahead = MIN(max_readahead, (uint64_t)conf->client_readahead_max_bytes);
   }
   if (conf->client_readahead_max_periods) {
-    max_readahead = MIN(max_readahead, ((uint64_t)conf->client_readahead_max_periods) * p);
+    max_readahead = MIN(max_readahead, in->layout.get_period()*(uint64_t)conf->client_readahead_max_periods);
   }
   f->readahead.set_max_readahead_size(max_readahead);
   vector<uint64_t> alignments;
-  alignments.push_back(p);
+  alignments.push_back(in->layout.get_period());
   alignments.push_back(in->layout.stripe_unit);
   f->readahead.set_alignments(alignments);
 
@@ -8099,8 +8098,9 @@ int Client::_read_async(Fh *f, uint64_t off, uint64_t len, bufferlist *bl)
     len = in->size - off;    
   }
 
-  ldout(cct, 10) << " max_bytes=" << conf->client_readahead_max_bytes
-		 << " max_periods=" << conf->client_readahead_max_periods << dendl;
+  ldout(cct, 10) << " min_bytes=" << f->readahead.get_min_readahead_size()
+                 << " max_bytes=" << f->readahead.get_max_readahead_size()
+                 << " max_periods=" << conf->client_readahead_max_periods << dendl;
 
   // read (and possibly block)
   int r, rvalue = 0;
@@ -8125,7 +8125,7 @@ int Client::_read_async(Fh *f, uint64_t off, uint64_t len, bufferlist *bl)
     delete onfinish;
   }
 
-  if(conf->client_readahead_max_bytes > 0) {
+  if(f->readahead.get_min_readahead_size() > 0) {
     pair<uint64_t, uint64_t> readahead_extent = f->readahead.update(off, len, in->size);
     if (readahead_extent.second > 0) {
       ldout(cct, 20) << "readahead " << readahead_extent.first << "~" << readahead_extent.second
